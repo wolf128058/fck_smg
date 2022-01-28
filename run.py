@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=missing-docstring, line-too-long
 
+import email
+import sys
+
 import os
 import hashlib
 
@@ -9,13 +12,63 @@ from urllib.parse import urlencode
 from io import BytesIO
 import re
 
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import subprocess
+
 from dotenv import load_dotenv
 
 import lxml.html
-import imap_tools
 from imap_tools import MailBox
 
 import pycurl
+
+def gpg_wrap(binary_plainmail):
+    plainmail = email.message_from_bytes(binary_plainmail)
+    gpg_cmdline = [os.getenv('GPG_PATH')] + [] + ['--armor', '--encrypt'] + ['--recipient', os.getenv('GPG_RECIPIENT')]
+    gpgProg = subprocess.Popen(gpg_cmdline, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               stdin=subprocess.PIPE)
+    innerMsg = MIMEMultipart()
+    outerMsg = MIMEMultipart(_subtype='encrypted', protocol="application/pgp-encrypted")
+
+    for part in plainmail.walk():
+        if part.get_content_maintype() == 'text':
+            new_mime = MIMEText(part.get_payload(), part.get_content_subtype(), _charset=part.get_charset())
+            new_mime.set_charset('UTF-8')
+            new_mime.replace_header("Content-Transfer-Encoding", "quoted-printable")
+            innerMsg.attach(new_mime)
+        elif part.get_content_maintype() == 'application':
+            new_mime = MIMEText(part.get_payload(), _charset=None)
+            new_mime.set_type('application/' + part.get_content_subtype())
+            new_mime.replace_header("Content-Transfer-Encoding", "base64")
+            if part.get_filename():
+                new_mime.replace_header("Content-Type",
+                                        'application/' + part.get_content_subtype() + '; ' + 'name="' + part.get_filename() + '"')
+                new_mime.add_header("Content-Disposition", "attachment; filename=\"" + part.get_filename() + "\"")
+
+            new_mime.set_charset(None)
+            innerMsg.attach(new_mime)
+
+    gpgOut = gpgProg.communicate(innerMsg.as_bytes())
+    if len(gpgOut[1]) > 0:
+        sys.exit('GPG Error')
+
+    encryptedMsgHeader = MIMEBase('application', 'pgp-encrypted')
+    encryptedMsgHeader.set_payload('Version 1\n')
+    outerMsg.attach(encryptedMsgHeader)
+
+    encryptedMsg = MIMEBase('application', 'octet-stream', name="encrypted.asc")
+    encryptedMsg.set_payload(gpgOut[0].decode('utf-8'))
+    encryptedMsg.add_header('Content-Disposition', 'inline', filename='encrypted.asc')
+    outerMsg.attach(encryptedMsg)
+
+    outerMsg['From'] = plainmail['From']
+    outerMsg['Subject'] = plainmail['Subject']
+    outerMsg['To'] = plainmail['To']
+    outerMsg['Date'] = plainmail['Date']
+    outerMsg['Message-ID'] = plainmail['Message-ID']
+    return outerMsg
 
 
 def login(c):
@@ -31,7 +84,7 @@ def login(c):
     matches = re.findall(regex, buffer_a.getvalue())
 
     if len(matches) < 2:
-        exit('No viewstate-information found.')
+        sys.exit('No viewstate-information found.')
     post_data = {'userName': os.getenv('SMG_PAGE_USER'), 'password': os.getenv('SMG_PAGE_PWD'),
                  'captchaWasNecessary': 'false', 'captcha_hidden': '', 'kickMailMessageCacheKey': '',
                  'org.apache.myfaces.trinidad.faces.FORM': 'loginForm',
@@ -58,9 +111,14 @@ def move_eml(c):
         c.setopt(c.WRITEDATA, buffer_a)
         c.perform()
 
+        currentmail = buffer_a.getvalue()
+
+        if os.getenv('GPG_RECIPIENT'):
+            currentmail = gpg_wrap(currentmail).as_bytes()
+
         with MailBox(os.getenv('IMAP_HOST')).login(os.getenv('IMAP_USER'), os.getenv('IMAP_PWD'),
                                                    initial_folder=os.getenv('IMAP_DIR')) as mailbox:
-            mailbox.append(buffer_a.getvalue(), 'DRS', dt=None, flag_set=[])
+            mailbox.append(currentmail, 'DRS', dt=None, flag_set=[])
 
 
 def main():
