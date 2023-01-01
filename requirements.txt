@@ -1,5 +1,5 @@
-keyring==18.0.1
-lxml==4.5.0
-imap_tools==0.50.2
-pycurl==7.43.0.6
-python-dotenv==0.19.2
+keyring==23.5.0
+lxml==4.8.0
+imap_tools==1.0.0
+pycurl==7.45.2
+python-dotenv==0.21.0
