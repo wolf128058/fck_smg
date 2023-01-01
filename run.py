@@ -24,6 +24,10 @@ from imap_tools import MailBox
 
 import pycurl
 
+from random_user_agent.user_agent import UserAgent
+from random_user_agent.params import SoftwareType, SoftwareName
+
+
 def gpg_wrap(binary_plainmail):
     plainmail = email.message_from_bytes(binary_plainmail)
     gpg_cmdline = [os.getenv('GPG_PATH')] + [] + ['--armor', '--encrypt'] + ['--recipient', os.getenv('GPG_RECIPIENT')]
@@ -76,6 +80,13 @@ def login(c):
     c.setopt(pycurl.TIMEOUT, 10)
     c.setopt(pycurl.FOLLOWLOCATION, 1)
     c.setopt(pycurl.COOKIEJAR, hashlib.sha256(os.getenv('SMG_PAGE_USER').encode('utf-8')).hexdigest() + '.cookie')
+
+    software_types = SoftwareType.WEB_BROWSER.value
+    software_names = [SoftwareName.CHROME.value, SoftwareName.FIREFOX.value, SoftwareName.EDGE.value]
+    user_agent_rotator = UserAgent(software_types=software_types, software_names=software_names, limit=100)
+    user_agent = user_agent_rotator.get_random_user_agent()
+    print('This time i am an: ' + user_agent)
+    c.setopt(pycurl.HTTPHEADER, ['User-Agent: ' + user_agent])
     buffer_a = BytesIO()
     c.setopt(c.WRITEDATA, buffer_a)
     c.perform()
